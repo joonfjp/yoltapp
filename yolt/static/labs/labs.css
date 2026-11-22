@@ -1,0 +1,53 @@
+/* Labs (yolt/static/labs): loaded by labs/index.js, so deleting the labs deletes their styles too. */
+
+/* "New": a small black pill (white on a selected, black, link). */
+.new-badge {
+  display: inline-block; margin-left: 4px; padding: 0 6px; border-radius: 980px; background: var(--ink); color: var(--accent-text);
+  font-size: 9px; font-weight: 600; letter-spacing: 0.06em; line-height: 16px; text-transform: uppercase; vertical-align: 1px;
+}
+[aria-current="page"] .new-badge { background: var(--accent-text); color: var(--accent-bg); }
+.page-title .new-badge, .label .new-badge { vertical-align: 0.35em; }
+.page-title .new-badge { font-size: 11px; line-height: 20px; padding: 0 8px; }
+
+/* Compilations: its tools (each lab with a page) as the design's segmented pill under the heading. */
+.tool-tabs { display: inline-flex; flex-wrap: wrap; gap: 2px; margin: 0 0 22px; padding: 4px; border-radius: 980px;
+  background: var(--fill); }
+.tool-tabs a { padding: 9px 20px; border-radius: 980px; text-decoration: none; font-size: 14px; font-weight: 500;
+  transition: background-color 0.25s, color 0.25s; }
+.tool-tabs a:hover { background: var(--pill-hover); }
+.tool-tabs a[aria-current="page"] { background: var(--accent-bg); color: var(--accent-text); }
+
+.lab-panel { margin-top: 32px; }
+
+/* Settings → Labs */
+.lab-toggle { gap: 2px; }
+.lab-toggle > span:first-child { display: inline-flex; align-items: center; gap: 8px; color: var(--text); }
+.lab-toggle .hint { margin: 0 0 0 24px; }
+
+/* Thread */
+.thread-layout { display: grid; grid-template-columns: minmax(0, 3fr) minmax(260px, 2fr); gap: 24px; align-items: start; }
+@media (max-width: 900px) { .thread-layout { grid-template-columns: 1fr; } }
+.thread-player .actions { margin: 0 0 14px; }
+.thread-player .player-stage { margin-left: 0; }
+.thread-now { margin: 10px 0; }
+.thread-review { margin: 0 0 14px; font-size: 13px; color: var(--muted); }
+.thread-review ul { margin: 6px 0 0; padding-left: 18px; }
+.thread-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 0; }
+.thread-list li { display: grid; grid-template-columns: 1fr auto auto; gap: 4px 10px; align-items: center; }
+.thread-list .thread-item {
+  display: flex; gap: 12px; align-items: baseline; min-width: 0; padding: 10px 14px; border: 0; border-radius: 14px;
+  background: var(--panel); box-shadow: var(--card-shadow); color: inherit; text-align: left; cursor: pointer; font: inherit;
+  transition: transform 0.3s var(--ease), box-shadow 0.3s var(--ease), background-color 0.25s;
+}
+.thread-list .thread-item:hover { transform: translateY(-1px); box-shadow: var(--card-shadow-hover); }
+.thread-list li.current .thread-item { background: var(--accent-bg); color: var(--accent-text); }
+.thread-list li.current .n, .thread-list li.current .thread-text .from { color: color-mix(in srgb, var(--accent-text) 70%, transparent); }
+.thread-list .n { color: var(--muted); font-variant-numeric: tabular-nums; font-size: 12px; }
+.thread-text { display: grid; min-width: 0; }
+.thread-text .title { font-size: 13px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.thread-text .from { margin: 0; padding: 0; font-size: 12px; color: var(--muted); }
+.thread-list .hop { grid-column: 1 / -1; padding: 5px 0 5px 22px; font-size: 12px; color: var(--faint); }
+.lab-save { margin-top: 6px; }
+.lab-save input[type="text"] { flex: 1; min-width: 180px; padding: 8px 14px; border-radius: 980px; }
+.lab-save .note { font-size: 12px; color: var(--muted); }
+

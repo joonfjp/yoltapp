@@ -1,0 +1,77 @@
+# Yolt, PostgreSQL (with pgvector), Parakeet, and Highlightr.
+#
+# Published on 127.0.0.1 only, so Yolt on this machine can reach it and nothing
+# else can. The password is read from the file .db-password (`make db` writes
+# it, with the matching YOLT_DATABASE_URL in .env), so only its path is ever on
+# a command line. It's used once, when the volume is first initialized.
+
+services:
+  yolt:
+    build: .
+    env_file: .env
+    user: "${YOLT_UID:-1000}:${YOLT_GID:-1000}"
+    ports:
+      - "127.0.0.1:${YOLT_PORT:-8485}:8485"
+    volumes:
+      - "${YOLT_DATA_DIR:-./data}:/data"
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8485/', timeout=3).close()"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    stop_grace_period: 30s
+    restart: unless-stopped
+
+  db:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: yolt
+      POSTGRES_DB: yolt
+      POSTGRES_PASSWORD_FILE: /run/secrets/yolt-db-password
+    ports:
+      - "127.0.0.1:${YOLT_DB_PORT:-5489}:5432"
+    volumes:
+      - yolt-db:/var/lib/postgresql/data
+      - ./.db-password:/run/secrets/yolt-db-password:ro
+    healthcheck:
+      test: ["CMD", "pg_isready", "-h", "127.0.0.1", "-U", "yolt", "-d", "yolt"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    restart: unless-stopped
+
+  parakeet-cpu:
+    image: joonfjp/parakeet:1.0.0
+    environment:
+      PARAKEET_USE_GPU: "false"
+      PARAKEET_DEFAULT_MODEL: parakeet-tdt-0.6b-v3
+      PARAKEET_BATCHED: "0"
+    ports:
+      - "127.0.0.1:5092:5092"
+    volumes:
+      - parakeet-models:/app/models
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:5092/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    restart: unless-stopped
+
+  highlightr-api:
+    image: joonfjp/highlightr:1.0.0
+    ports:
+      - "127.0.0.1:8000:8000"
+    environment:
+      PYTHONUNBUFFERED: "1"
+      LLM_BASE_URL: "${LLM_BASE_URL:-http://host.docker.internal:8080/v1}"
+      LLM_MODEL: "${LLM_MODEL:-gemma4}"
+      LLM_API_KEY: "${LLM_API_KEY:-}"
+    restart: unless-stopped
+
+volumes:
+  yolt-db:
+  parakeet-models:

@@ -1,0 +1,11 @@
+**
+!Dockerfile
+!pyproject.toml
+!uv.lock
+!yolt/
+!yolt/**
+!spec/
+!spec/yolt.openapi.json
+**/__pycache__
+**/*.py[cod]
+**/.DS_Store

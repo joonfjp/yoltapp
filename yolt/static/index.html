@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en" class="booting">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#f5f5f7">
+  <title>Yolt</title>
+  <!--META-->
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cdefs%3E%3CradialGradient id='s' cx='.32' cy='.28' r='.75'%3E%3Cstop offset='0' stop-color='%23777'/%3E%3Cstop offset='.6' stop-color='%23000'/%3E%3C/radialGradient%3E%3C/defs%3E%3Ccircle cx='8' cy='8' r='7.5' fill='url(%23s)'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="/static/app.css?v=__VERSION__">
+  <!-- Light or dark, and the nav's place (Settings → Appearance; app.js applyColorMode, setNavLayout), set before
+    the first paint so the page doesn't flash or jump. -->
+  <script>try {
+    const root = document.documentElement, mode = localStorage.getItem('yolt.mode.v1');
+    if (mode === 'dark' || (mode === 'system' && matchMedia('(prefers-color-scheme: dark)').matches)) {
+      root.classList.add('dark');
+      document.querySelector('meta[name="theme-color"]').content = '#111113';
+    }
+    if (localStorage.getItem('yolt.nav.v1') === 'side') root.classList.add('nav-side');
+  } catch {}</script>
+</head>
+<body>
+  <div class="app">
+    <header class="brand"><a href="/" data-link><span>Yolt</span><span class="tagline">your personal TV</span></a></header>
+
+    <aside class="sidebar">
+      <nav class="panel nav-panel" aria-label="TV, episodes and subscriptions">
+        <a href="/tv" data-link data-nav="tv">TV</a>
+        <a href="/episodes" data-link data-nav="episodes">Episodes <span class="count" id="episodes-count"
+          title="Episodes clipped or being clipped"></span></a>
+        <!-- Saved and Search (and Compilations, hidden for now) are tabs inside Episodes (app.js libraryTabs), and in the sidebar
+          they're under it while you're in it (app.js renderSidebar, app.css .nav-sub). -->
+        <div class="nav-sub"><div id="nav-sub-links"></div></div>
+        <a href="/subscriptions" data-link data-nav="subscriptions">Subscriptions <span class="count" id="subs-count"
+          title="Channels subscribed to"></span></a>
+      </nav>
+      <button type="button" class="box-button" id="open-submit">+ Youtube URL</button>
+      <!-- Settings and the GitHub link: in line with the rest across the top, a row at the foot of the side nav (app.css). -->
+      <div class="sidebar-foot">
+        <a href="/settings" data-link class="box-button settings-button" id="settings-link" data-nav="settings">Settings</a>
+        <a href="https://github.com/joonfjp" class="github-link" target="_blank" rel="noopener" aria-label="GitHub"
+          title="GitHub"><svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path fill="currentColor"
+          d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg></a>
+      </div>
+    </aside>
+
+    <main class="panel main" id="main" tabindex="-1"></main>
+  </div>
+
+  <dialog class="modal-backdrop" id="submit-modal" aria-labelledby="submit-title">
+    <form class="modal" id="submit-form" novalidate>
+      <button type="button" class="modal-close" id="close-submit" aria-label="Close">×</button>
+      <h2 id="submit-title">Enter a YouTube link</h2>
+      <input id="submit-url" name="url" type="url" autocomplete="off" spellcheck="false"
+             placeholder="https://www.youtube.com/..." aria-describedby="submit-error" required>
+      <div class="lookup" id="lookup" aria-live="polite" hidden></div>
+      <label class="instructions-label" for="submit-instructions">What should the clips focus on? <span>(optional)</span></label>
+      <textarea id="submit-instructions" name="instructions" rows="3" maxlength="1000"></textarea>
+      <button type="button" class="options-toggle" id="submit-options-toggle" aria-expanded="false"
+              aria-controls="submit-options">Clip options <svg class="chevron" viewBox="0 0 24 24" width="14" height="14"
+              aria-hidden="true"><path d="M6 9l6 6 6-6" fill="none" stroke="currentColor" stroke-width="2.2"
+              stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+      <div class="submit-options" id="submit-options" hidden></div>
+      <p class="form-error" id="submit-error" role="alert"></p>
+      <button type="submit" class="box-button submit-button" id="submit-button">Submit</button>
+    </form>
+  </dialog>
+
+  <script type="module" src="/static/app.js?v=__VERSION__"></script>
+</body>
+</html>

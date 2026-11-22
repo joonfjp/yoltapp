@@ -1,0 +1,2 @@
+qrcode.mjs: qrcode-generator 2.0.4 (npm), MIT license, Copyright (c) 2009 Kazuhiko Arase.
+Unmodified copy of dist/qrcode.mjs. Used by tv.js for the QR code linking to the full episode.
