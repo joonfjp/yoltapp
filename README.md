@@ -1,14 +1,12 @@
 <div align="center">
 
-<img src="docs/media/yolt-logo.svg" width="64" height="64" alt="">
-
-# Yolt.app
+<h1><img src="docs/media/yolt-logo.svg" width="20" height="20" alt=""> Yolt.app</h1>
 
 **your personal TV**
 
 Paste a link to find clips.<br>
-Follow channels, search by words or meaning, and watch your clips back to back.<br>
-Each clip plays a time range in the original video.
+Follow channels and watch your clips back to back.<br>
+Each clip plays a time range in the original YouTube video.
 
 ![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-3776AB?logo=python&logoColor=white)
 ![FastAPI](https://img.shields.io/badge/FastAPI-009688?logo=fastapi&logoColor=white)
@@ -20,7 +18,7 @@ Each clip plays a time range in the original video.
 
 <img src="docs/media/tv.gif" width="880" alt="Yolt's TV page playing a clip, with the episode it's from on the left, its quotes lighting up as they're said, a QR code for the full episode, the seconds left, and the next clip, which slides up over it">
 
-<sub>Watch back to back. Scan the QR code to open the original video at that moment.</sub>
+<sub>Your personal TV. Scan the QR code to open the original video at that moment.</sub>
 
 </div>
 
@@ -97,8 +95,6 @@ Press **+ Youtube URL** anywhere, or **Clip** on a video a subscription found. Y
 </div>
 
 The run's page then shows each step as it happens: fetching the video's details, getting the transcript, then Highlightr finding, ranking and titling the moments.
-
-> Demo GIF to come: a run going from "Fetching info" to its clips (`docs/media/run.gif`). It needs a real run to record.
 
 | if you want | do this |
 |---|---|
