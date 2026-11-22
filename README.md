@@ -2,7 +2,7 @@
 
 <h1><img src="docs/media/yolt-logo.svg" width="20" height="20" alt=""> Yolt.app</h1>
 
-**your personal TV**
+**your self-hosted personal TV**
 
 Paste a link to find clips.<br>
 Follow channels and watch your clips back to back.<br>
@@ -11,7 +11,7 @@ Each clip plays a time range in the original YouTube video.
 ![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-3776AB?logo=python&logoColor=white)
 ![FastAPI](https://img.shields.io/badge/FastAPI-009688?logo=fastapi&logoColor=white)
 ![PostgreSQL 16 + pgvector](https://img.shields.io/badge/PostgreSQL%2016-pgvector-4169E1?logo=postgresql&logoColor=white)
-![Runs locally](https://img.shields.io/badge/runs-locally%2C%20on%20127.0.0.1-555555)
+![Runs locally](https://img.shields.io/badge/runs-locally-555555)
 ![API](https://img.shields.io/badge/API-v0.9.0-6f42c1)
 
 [Features](#features) · [Why Yolt](#why-yolt) · [New to Yolt?](#new-to-yolt) · [Quick start](#quick-start) · [Using it](#using-it) · [The services](#the-services) · [When something goes wrong](#when-something-goes-wrong) · [How it works](#how-it-works) · [Limits](#limits) · [Reference](#reference)
@@ -159,14 +159,16 @@ Yolt does the bookkeeping. The heavy work is done by services on your network:
 
 | service | what it does | default address | if it's down |
 |---|---|---|---|
-| **Parakeet** | transcribes a video that has no usable captions | `http://parakeet-cpu:5092` in Compose | videos without captions in their spoken language can't be clipped. Videos with captions don't need it |
-| **Highlightr** | picks and ranks the moments | `http://highlightr-api:8000` in Compose | nothing can be clipped. Everything already clipped still works |
+| **[Parakeet](https://github.com/joonfjp/ripeclips/tree/main/parakeet)** | transcribes a video that has no usable captions | `http://parakeet-cpu:5092` in Compose | videos without captions in their spoken language can't be clipped. Videos with captions don't need it |
+| **[Highlightr](https://github.com/joonfjp/ripeclips/tree/main/highlightr)** | picks and ranks the moments | `http://highlightr-api:8000` in Compose | nothing can be clipped. Everything already clipped still works |
 | **LLM** | used by Highlightr to find, rank and title moments, and by Yolt to work out who's in an episode | Yolt override off | clipping needs Highlightr’s LLM. Automatic speaker inference needs a Yolt LLM endpoint |
 | **Embeddings** | turns clips and searches into vectors for search by meaning | Off | **Exact words** still works. Semantic search becomes available once an embeddings endpoint is configured and clips are embedded |
 
 Press **Test** next to each in Settings to check it from Yolt.
 
 ### The LLM endpoint
+
+Use an OpenAI-compatible Chat Completions endpoint that supports structured JSON outputs (`response_format: json_schema`). In Yolt’s **LLM endpoint** setting, enter the full URL, such as `http://host.docker.internal:8080/v1/chat/completions`, or its API base URL ending in `/v1`. Yolt appends `/chat/completions` to the base URL.
 
 The **LLM endpoint** setting is used in two places. Yolt calls it to work out who's in an episode. It also sends it to Highlightr with every job, and Highlightr then uses it **instead of** the LLM Highlightr was started with. That means:
 
@@ -285,7 +287,7 @@ This pulls and starts just Parakeet and Highlightr. Run `make services-stop` to 
 
 Containerized Yolt reaches Parakeet and Highlightr by their Compose service names. Press **Test** in Settings to check that Yolt can reach them. For a service outside Compose, use an address reachable from the container, such as its LAN address.
 
-Highlightr defaults to the host's OpenAI-compatible LLM at `http://host.docker.internal:8080/v1`, model `gemma4`. Override `LLM_BASE_URL`, `LLM_MODEL`, and optionally `LLM_API_KEY` in `.env` or when starting the services:
+Highlightr defaults to `http://host.docker.internal:8080/v1/chat/completions` with model `gemma4`. To change it, set `LLM_BASE_URL` to your provider’s API base URL, and set `LLM_MODEL` and `LLM_API_KEY` as needed.
 
 ```bash
 LLM_BASE_URL="http://host.docker.internal:11434/v1" LLM_MODEL="your-model" make services
@@ -305,4 +307,4 @@ For UI work with `make dev`, `make fake` starts placeholder services on the host
 
 ## Credits
 
-Yolt transcribes with [Parakeet](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3) and picks moments with Highlightr, the services from RipeClips. It reads YouTube with [yt-dlp](https://github.com/yt-dlp/yt-dlp), stores everything in PostgreSQL with [pgvector](https://github.com/pgvector/pgvector), and searches by meaning with [Qwen3-Embedding](https://huggingface.co/Qwen/Qwen3-Embedding-8B). The TV's QR codes are drawn by [qrcode-generator](https://github.com/kazuhikoarase/qrcode-generator) by Kazuhiko Arase (MIT), vendored in `yolt/static/vendor/`.
+Yolt uses the transcription and highlight services from [RipeClips](https://github.com/joonfjp/ripeclips). Parakeet runs NVIDIA’s [Parakeet TDT 0.6B v3 model](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3). Yolt reads YouTube with [yt-dlp](https://github.com/yt-dlp/yt-dlp), stores the catalogue in PostgreSQL with [pgvector](https://github.com/pgvector/pgvector), and searches by meaning with [Qwen3-Embedding](https://huggingface.co/Qwen/Qwen3-Embedding-8B). The TV's QR codes are drawn by [qrcode-generator](https://github.com/kazuhikoarase/qrcode-generator) by Kazuhiko Arase (MIT), vendored in `yolt/static/vendor/`.
