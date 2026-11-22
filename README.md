@@ -2,7 +2,7 @@
 
 <h1><img src="docs/media/yolt-logo.svg" width="20" height="20" alt=""> Yolt.app</h1>
 
-**your self-hosted personal TV**
+**your personal TV**
 
 Paste a link to find clips.<br>
 Follow channels and watch your clips back to back.<br>
@@ -18,7 +18,7 @@ Each clip plays a time range in the original YouTube video.
 
 <img src="docs/media/tv.gif" width="880" alt="Yolt's TV page playing a clip, with the episode it's from on the left, its quotes lighting up as they're said, a QR code for the full episode, the seconds left, and the next clip, which slides up over it">
 
-<sub>Your personal TV. Scan the QR code to open the original video at that moment.</sub>
+<sub>Your self-hosted personal TV. Scan the QR code to open the original video at that moment.</sub>
 
 </div>
 
@@ -36,6 +36,7 @@ Each clip plays a time range in the original YouTube video.
 ✅ **Themes.** See what your catalogue is about, grouped by meaning, and search within any of them.\
 ✅ **Saved and For you.** Keep clips with **+**, and the home page shows clips like the one you saved last.\
 ✅ **A link for every clip.** `/c/<clip id>` plays just that moment.\
+✅ **Download any clip as an MP4.** Open a clip and choose **Download MP4** to export just that moment for offline viewing or editing. Yolt creates the file on demand.\
 ✅ **Light or dark.** Dark mode, and the nav on top or down the side, in **Settings → Appearance**.\
 ✅ **One API for everything.** The UI uses the same documented API you can call yourself.\
 
