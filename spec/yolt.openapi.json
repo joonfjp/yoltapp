@@ -1435,6 +1435,55 @@
         }
       }
     },
+    "/clips/{clip_id}/download": {
+      "post": {
+        "tags": [
+          "Clips"
+        ],
+        "operationId": "downloadClip",
+        "summary": "Download a clip as MP4",
+        "description": "Download the stored time range from YouTube and return it as an MP4 attachment.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/clip_id"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The MP4 file for the clip.",
+            "content": {
+              "video/mp4": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
+          },
+          "502": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
     "/clips/{clip_id}/context": {
       "get": {
         "tags": [

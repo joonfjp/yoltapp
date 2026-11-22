@@ -13,12 +13,15 @@ import json
 from collections import Counter
 from collections.abc import Iterator
 from datetime import date, datetime, timezone
+from pathlib import Path as FilePath
+from tempfile import TemporaryDirectory
+from threading import BoundedSemaphore
 from typing import Annotated, Any, Literal, get_origin
 
 import psycopg
 from fastapi import APIRouter, Depends, FastAPI, Header, Path, Query, Request
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, Response
 from pydantic import BaseModel, ConfigDict, Field, StrictInt
 from starlette.routing import Match
 
@@ -610,6 +613,43 @@ def list_themes(conn: Conn, embed: Embed, k: Annotated[int, Query(ge=2, le=theme
 @router.get("/clips/{clip_id}")
 def get_clip(conn: Conn, base: Base, clip_id: int, include: Annotated[list[str], Query()] = []):
     return clips_repo.get_clip(conn, clip_id, parse_include(include, clips_repo.INCLUDES), base)
+
+
+_CLIP_DOWNLOADS = BoundedSemaphore(2)
+
+
+class ClipDownloadResponse(FileResponse):
+    def __init__(self, path: FilePath, folder: TemporaryDirectory):
+        super().__init__(path, filename=path.name, media_type="video/mp4", headers={"Cache-Control": "no-store"})
+        self.folder = folder
+
+    async def __call__(self, scope, receive, send):
+        try:
+            await super().__call__(scope, receive, send)
+        finally:
+            self.folder.cleanup()
+
+
+@router.post("/clips/{clip_id}/download")
+def download_clip(db: Db, clip_id: int):
+    with db.connect() as conn:
+        source = clips_repo.download_source(conn, clip_id)
+    if not _CLIP_DOWNLOADS.acquire(blocking=False):
+        raise ApiProblem(503, "download-busy", "Clip downloads are busy. Try again shortly.")
+
+    try:
+        folder = TemporaryDirectory(prefix="yolt-clip-")
+        path = FilePath(folder.name) / f"clip-{clip_id}.mp4"
+        try:
+            youtube.download_mp4(source["video_id"], source["start_ms"], source["end_ms"], path)
+            return ClipDownloadResponse(path, folder)
+        except BaseException:
+            folder.cleanup()
+            raise
+    except youtube.YouTubeError as error:
+        raise ApiProblem(502, "clip-download-failed", "Could not prepare the clip download", detail=str(error)) from error
+    finally:
+        _CLIP_DOWNLOADS.release()
 
 
 @router.get("/clips/{clip_id}/context")

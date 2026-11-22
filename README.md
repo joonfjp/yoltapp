@@ -1,5 +1,7 @@
 <div align="center">
 
+<img src="docs/media/yolt-logo.svg" width="64" height="64" alt="">
+
 # Yolt.app
 
 **your personal TV**
@@ -216,10 +218,8 @@ flowchart LR
 
 What Yolt doesn't do:
 
-- **Serve anyone else.** It has no accounts, so Compose publishes the web port only on `127.0.0.1` on the host. To use it from another machine, open an SSH tunnel with `ssh -L 8485:127.0.0.1:8485 <host>`. Share links only work where Yolt can be reached.
-- **Make video files.** Clips play through YouTube. A video that's removed, made private, or not allowed to play on other sites can't be watched in Yolt either.
 - **Clip without its services.** Highlightr and an LLM are always needed, and Parakeet for videos without captions.
-- **Clip more than one video at a time.**
+- **Clip more than one video at a time.** Keeps memory pressure low. Queuing is in place.
 - **Keep Saved clips across browsers.** They're stored in the browser you saved them in.
 - **Punctuate auto-captions.** Clips from YouTube's auto-generated captions are lowercase and cut on pauses rather than at sentence ends.
 - **Look far back on a channel.** A check only sees a channel's 5 newest uploads and 25 newest streams.

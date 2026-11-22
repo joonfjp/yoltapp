@@ -1,13 +1,17 @@
-"""YouTube access: URL validation, metadata, audio download, storyboard frames."""
+"""YouTube access: URL validation, metadata, media downloads, storyboard frames."""
 
 from __future__ import annotations
 
 import json
+import os
 import re
+import signal
 import subprocess
+import sys
 import threading
 import time
 from collections import OrderedDict
+from contextlib import suppress
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -136,6 +140,36 @@ def metadata(info: dict) -> dict:
 
 
 CONVERT_CHECK_SECONDS = 0.5
+CLIP_DOWNLOAD_TIMEOUT = 300
+
+
+def download_mp4(video_id: str, start_ms: int, end_ms: int, output: Path) -> None:
+    """Fetch the saved time range and encode it as a portable MP4."""
+    if not VIDEO_ID_RE.fullmatch(video_id) or not 0 <= start_ms < end_ms:
+        raise YouTubeError("The clip has an invalid video ID or time range.")
+
+    section = f"*{start_ms / 1000:.3f}-{end_ms / 1000:.3f}"
+    command = [
+        sys.executable, "-m", "yt_dlp", "--ignore-config", "--no-playlist", "--quiet",
+        "--no-warnings", "--no-progress", "--socket-timeout", "20", "-t", "mp4", "-S", "res:1080",
+        "--download-sections", section, "--force-keyframes-at-cuts",
+        "--downloader-args", "ffmpeg_o:-f mp4 -c:v libx264 -preset veryfast -pix_fmt yuv420p -c:a aac -movflags +faststart",
+        "-o", str(output.with_suffix(".%(ext)s")), "--", watch_url(video_id),
+    ]
+    # yt-dlp starts FFmpeg as a child. Stop the whole process group on timeout.
+    with subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                          stderr=subprocess.DEVNULL, start_new_session=True) as process:
+        try:
+            status = process.wait(timeout=CLIP_DOWNLOAD_TIMEOUT)
+        except subprocess.TimeoutExpired as error:
+            with suppress(ProcessLookupError):
+                if os.name == "posix":
+                    os.killpg(process.pid, signal.SIGKILL)
+                else:
+                    process.kill()
+            raise YouTubeError("The clip download timed out. Try again.") from error
+    if status or not output.is_file() or not output.stat().st_size:
+        raise YouTubeError("Could not download the clip from YouTube. Check that the video is available and try again.")
 
 
 def download_audio(

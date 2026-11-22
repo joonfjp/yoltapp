@@ -310,6 +310,13 @@ def get_clip(conn: psycopg.Connection, clip_id: int, include: set[str], base: st
     return found[0]
 
 
+def download_source(conn: psycopg.Connection, clip_id: int) -> dict:
+    row = conn.execute(f"SELECT e.video_id, c.start_ms, c.end_ms {CLIP_FROM} WHERE c.id = %s", (clip_id,)).fetchone()
+    if row is None:
+        raise not_found("Clip")
+    return row
+
+
 def get_shared(conn: psycopg.Connection, slug: str, include: set[str], base: str) -> dict:
     row = conn.execute("SELECT id FROM clips WHERE slug = %s", (slug,)).fetchone()
     if row is None:

@@ -958,6 +958,8 @@ async function showClip(slug) {
         ${labs.clipActions(clip)}
         <button type="button" class="box-button small" id="copy-link">Copy share link</button>
         <span class="note" id="copy-note" role="status"></span>
+        <button type="button" class="box-button small" id="download-clip">Download MP4</button>
+        <span class="note" id="download-note" role="status"></span>
       </div>
       <div id="clip-appearances"></div>
       ${clip.text ? `<details class="transcript"><summary>Transcript</summary><p>${esc(clip.text)}</p></details>` : ''}
@@ -977,6 +979,7 @@ async function showClip(slug) {
       note.textContent = clip.share_url;
     }
   });
+  $('#download-clip').addEventListener('click', (event) => downloadClip(clip.id, event.currentTarget, $('#download-note')));
   const box = $('#clip-appearances'); // this clip's, not whichever page is shown when the answer comes
   api(`/clips/${clip.id}/appearances`).then(({ data }) => {
     if (state.view !== view || !box.isConnected || !data.length) return;
@@ -985,6 +988,31 @@ async function showClip(slug) {
   }).catch(() => {});
   labs.clip(clip, view);
   await mountPlayer(clip);
+}
+
+async function downloadClip(id, button, note) {
+  button.disabled = true;
+  note.textContent = 'Preparing MP4…';
+  try {
+    const response = await fetch(`/api/v1/clips/${encodeURIComponent(id)}/download`, { method: 'POST' });
+    if (!response.ok) {
+      const problem = await response.json().catch(() => null);
+      throw new Error(problemText(problem) || 'Could not download the clip. Try again.');
+    }
+    const url = URL.createObjectURL(await response.blob());
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `clip-${id}.mp4`;
+    document.body.append(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 30_000);
+    note.textContent = 'Download started.';
+  } catch (error) {
+    note.textContent = error.message;
+  } finally {
+    button.disabled = false;
+  }
 }
 
 // --- player ------------------------------------------------------------------
