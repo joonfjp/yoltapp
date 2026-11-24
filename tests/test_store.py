@@ -196,6 +196,68 @@ def test_the_search_vector_migration_fills_in_stored_transcripts(database_url):
                             ).fetchone()["indexdef"].endswith("USING gin (fts)")
 
 
+def test_the_passage_search_vector_migration_fills_in_stored_passages(database_url):
+    """0017 stores each passage's tsvector for keyword search, computing it for passages already there."""
+    db = Database(database_url)
+    try:
+        seed(db, "aaaaaaaaaaa")
+    finally:
+        db.close()
+    with psycopg.connect(database_url, row_factory=dict_row) as conn:  # back to before 0017, the passages kept
+        conn.execute("ALTER TABLE passages DROP COLUMN fts")  # and its index
+        conn.execute("CREATE INDEX passages_fts_idx ON passages USING gin (to_tsvector('english', text))")
+        conn.execute("DELETE FROM schema_migrations WHERE version = 17")
+        conn.commit()
+        assert migrate(conn) == ["0017_passage_search_vector"]
+        assert conn.execute("SELECT bool_and(fts = to_tsvector('english', text)) AS same, "
+                            "bool_or(fts @@ websearch_to_tsquery('english', 'consciousness')) AS found "
+                            "FROM passages").fetchone() == {"same": True, "found": True}
+        assert conn.execute("SELECT indexdef FROM pg_indexes WHERE indexname = 'passages_fts_idx'"
+                            ).fetchone()["indexdef"].endswith("USING gin (fts)")
+
+
+def test_the_inline_vectors_migration_moves_stored_vectors_into_their_rows(database_url):
+    """0018 keeps vectors in their rows instead of TOAST storage, moving the ones already stored there."""
+    import random
+
+    db = Database(database_url)
+    try:
+        seed(db, "aaaaaaaaaaa")
+    finally:
+        db.close()
+    rng = random.Random(7)  # dense values, which don't compress (a sparse vector would stay in its row anyway)
+    with psycopg.connect(database_url, row_factory=dict_row) as conn:
+        clip_id = conn.execute("SELECT min(id) AS id FROM clips").fetchone()["id"]
+        stored = [round(rng.uniform(-1, 1), 6) for _ in range(1024)]
+        # Back to before 0018: TOAST storage, with the vector stored out of its row.
+        for table in ("clip_vectors", "passage_vectors"):
+            conn.execute(f"ALTER TABLE {table} ALTER COLUMN embedding SET STORAGE EXTENDED")
+        conn.execute("INSERT INTO clip_vectors (clip_id, model_name, text_digest, embedding) "
+                     "VALUES (%s, 'm@1024', 'd', %s::real[]::vector)", (clip_id, stored))
+        conn.execute("DROP INDEX clip_vectors_lookup_idx")
+        conn.execute("DROP INDEX passage_vectors_lookup_idx")
+        conn.execute("DELETE FROM schema_migrations WHERE version = 18")
+        conn.commit()
+
+        def toasted() -> int:
+            toast = conn.execute("SELECT reltoastrelid::regclass::text AS t FROM pg_class "
+                                 "WHERE oid = 'clip_vectors'::regclass").fetchone()["t"]
+            return conn.execute(f"SELECT count(*) AS n FROM {toast}").fetchone()["n"]
+
+        assert toasted() > 0
+        assert migrate(conn) == ["0018_inline_vectors"]
+        assert toasted() == 0
+        assert conn.execute("SELECT attrelid::regclass::text AS t, attstorage FROM pg_attribute WHERE attname = "
+                            "'embedding' AND attrelid IN ('clip_vectors'::regclass, 'passage_vectors'::regclass) "
+                            "ORDER BY 1").fetchall() == [{"t": "clip_vectors", "attstorage": "m"},
+                                                         {"t": "passage_vectors", "attstorage": "m"}]
+        assert conn.execute("SELECT embedding::real[] AS v FROM clip_vectors").fetchone()["v"] == pytest.approx(stored)
+        # The bookkeeping columns are in indexes, so counting what's embedded never reads the (now wide) rows.
+        assert {r["indexname"] for r in conn.execute("SELECT indexname FROM pg_indexes WHERE tablename IN "
+                                                     "('clip_vectors', 'passage_vectors')")} >= {
+            "clip_vectors_lookup_idx", "passage_vectors_lookup_idx"}
+
+
 def test_unreachable_database_error_hides_the_password():
     with pytest.raises(DatabaseUnavailable) as error:
         Database("postgresql://yolt:hunter2@127.0.0.1:1/yolt", wait_seconds=0.5)

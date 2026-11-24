@@ -14,9 +14,10 @@ from ..embeddings import MAX_QUERY_CHARS, EmbeddingService, EmbeddingUnavailable
 from ..problems import ApiProblem, ErrorList, FieldError, invalid
 from .common import iso
 
-KEYWORD_SQL = """SELECT p.clip_id, max(ts_rank_cd(to_tsvector('english', p.text), query)) AS relevance
+# passages.fts is the stored to_tsvector('english', text) (migration 0017), so ranking doesn't re-tokenize.
+KEYWORD_SQL = """SELECT p.clip_id, max(ts_rank_cd(p.fts, query)) AS relevance
     FROM passages p, websearch_to_tsquery('english', %(q)s) query
-    WHERE to_tsvector('english', p.text) @@ query
+    WHERE p.fts @@ query
     GROUP BY p.clip_id"""
 
 # Cosine distance with an all-zero vector is NaN (which would sort first and can't be sent as JSON), so
@@ -164,8 +165,7 @@ def passages_for(conn: psycopg.Connection, ranking: Ranking, clip_ids: list[int]
     """Each clip's nearest passages, with their similarity. Hybrid also keeps every keyword-matched passage."""
     if not clip_ids:
         return {}
-    keyword = ("to_tsvector('english', p.text) @@ websearch_to_tsquery('english', %(q)s)"
-               if ranking.mode == "hybrid" else "FALSE")
+    keyword = "p.fts @@ websearch_to_tsquery('english', %(q)s)" if ranking.mode == "hybrid" else "FALSE"
     rows = conn.execute(
         f"""SELECT p.clip_id, p.first_word_seq, p.last_word_seq, p.text, {keyword} AS keyword,
                    1 - (pv.embedding <=> %(qv)s::vector) AS similarity

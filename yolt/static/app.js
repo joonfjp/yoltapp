@@ -46,11 +46,18 @@ const esc = (value) => String(value ?? '').replace(/[&<>"']/g, (c) => (
 ));
 
 // Like api(), but returns {ok, status, data} instead of throwing, for callers that handle specific problems.
+// Yolt not answering at all (restarting, stopped) comes back the same way, as status 0 with what the browser
+// said, so no caller is left waiting on a request that failed before it got an answer.
 async function apiRaw(path, options = {}) {
-  const response = await fetch(`/api/v1${path}`, {
-    ...options,
-    headers: options.body ? { 'Content-Type': 'application/json' } : undefined,
-  });
+  let response;
+  try {
+    response = await fetch(`/api/v1${path}`, {
+      ...options,
+      headers: options.body ? { 'Content-Type': 'application/json' } : undefined,
+    });
+  } catch (failure) {
+    return { ok: false, status: 0, data: { detail: `Couldn’t reach Yolt (${failure.message}).` } };
+  }
   return { ok: response.ok, status: response.status, data: await response.json().catch(() => null) };
 }
 
@@ -86,6 +93,51 @@ function moreFailed(button, error) {
     button.after(note);
   }
   note.textContent = `Couldn’t load more: ${error?.message || 'the request failed'}`;
+}
+
+// Lists that page with More (found videos, episodes): one page into `view[key]`, the first page or the one
+// after `cursor`, each item once. Once a later page is shown, a first page (a poll's) is dropped rather than
+// replacing the list. True when the list changed and needs drawing.
+async function loadListPage(view, { path, cursor, key, idOf, shown }) {
+  const wasPaged = view.paged;
+  if (cursor) {
+    if (view.loadingMore) return false;
+    view.loadingMore = true;
+    view.paged = true; // from now on new items don't replace the list; the runs on it still update
+  }
+  let page;
+  try {
+    page = await api(path);
+  } catch (error) {
+    if (cursor && state.view === view) view.paged = wasPaged; // nothing was added after all
+    throw error;
+  } finally {
+    if (cursor) view.loadingMore = false;
+  }
+  if (!shown()) return false;
+  if (cursor) {
+    const have = new Set(view[key].map(idOf));
+    view[key].push(...page.data.filter((item) => !have.has(idOf(item))));
+  } else {
+    if (view.paged) return false; // a later page arrived meanwhile; this one is already on the list
+    view[key] = page.data;
+  }
+  view.nextCursor = page.next_cursor;
+  return true;
+}
+
+// One listener for every More in `box` (each page's button replaces the last), off while its page loads.
+function onMore(box, isOn, load) {
+  box.addEventListener('click', async (event) => {
+    const button = event.target.closest('[data-more]');
+    if (!button || button.disabled || !isOn()) return;
+    button.disabled = true;
+    try {
+      await load(button.dataset.more);
+    } catch (error) {
+      moreFailed(button, error);
+    }
+  });
 }
 
 const isActive = (run) => run.status === 'queued' || run.status === 'processing';
@@ -215,10 +267,14 @@ function elapsed(iso) {
 }
 
 // A running clock: its text is filled in (and kept current) by tickClocks, not baked into the page's HTML,
-// so a poll only redraws the page when the run itself moved on.
-const since = (iso) => (iso ? `<span data-since="${esc(iso)}"></span>` : '');
+// so a poll only redraws the page when the run itself moved on. A timer isn't announced as it ticks, even
+// inside the run's live status box (which would otherwise read the elapsed time out every second).
+const since = (iso) => (iso ? `<span role="timer" data-since="${esc(iso)}"></span>` : '');
 function tickClocks() {
-  for (const el of document.querySelectorAll('[data-since]')) el.textContent = elapsed(el.dataset.since);
+  for (const el of document.querySelectorAll('[data-since]')) {
+    const text = elapsed(el.dataset.since);
+    if (el.textContent !== text) el.textContent = text;
+  }
 }
 setInterval(tickClocks, 1000);
 
@@ -342,9 +398,14 @@ async function route() {
 
 // The queue, and the sidebar's totals with it. Cheap whatever its length: polled while runs are going.
 // Returns whether it changed (a run queued, started, ended or cancelled).
+let queueLoads = 0;
 async function loadQueue() {
+  // A poll and a click can both be loading it: an older answer arriving last mustn't replace a newer one.
+  const load = ++queueLoads;
   const before = state.queueLoaded ? queueKey() : null;
-  state.queue = await api('/queue');
+  const queue = await api('/queue');
+  if (load !== queueLoads) return false; // the later load draws it
+  state.queue = queue;
   state.queueLoaded = true;
   const changed = queueKey() !== before;
   renderSidebar();
@@ -811,11 +872,19 @@ function embeddingNotice(info, pending, total = null) {
 
 async function showRun(id, { quiet = false } = {}) {
   const { view } = state;
+  // Loads overlap (a poll, and the refresh after Cancel or Retry): only the latest one started draws, so an
+  // answer from before the click can't put the run back as it was.
+  const load = (view.runLoad || 0) + 1;
+  view.runLoad = load;
+  // Once the run is shown its episode is known, so a refresh asks for both at once.
+  const episodeOf = (episodeId) => api(`/episodes/${episodeId}`).catch(() => null);
+  const known = String(view.data?.id) === String(id) ? view.data.episode.id : null;
+  const early = known != null ? episodeOf(known) : null;
   const run = await api(`/runs/${encodeURIComponent(id)}?include=clips`);
-  const episode = await api(`/episodes/${run.episode.id}`).catch(() => null);
+  const episode = await (early && run.episode.id === known ? early : episodeOf(run.episode.id));
   const unembedded = run.status === 'ready' ? run.clip_count - run.embedded_clip_count : 0;
   const info = unembedded ? await api('/').catch(() => null) : null;
-  if (!stillOn(view, 'run') || view.id !== id) return;
+  if (!stillOn(view, 'run') || view.id !== id || view.runLoad !== load) return;
   view.data = run;
   setTitle(run.episode.title);
   // Keep polling until they're searchable, unless there's no embeddings server to make them so; and
@@ -833,14 +902,15 @@ async function showRun(id, { quiet = false } = {}) {
     // routing), buttons still waiting on their request, and which control has focus.
     const editor = main.querySelector('#speakers-form');
     const keepEditor = editor && editorView === view;
-    const waiting = [...main.querySelectorAll(BUSY_BUTTONS)].filter((b) => b.disabled);
+    // Keyed now, while they're still in the page: focusKey() can't place a button the redraw has detached.
+    const waiting = [...main.querySelectorAll(BUSY_BUTTONS)].filter((b) => b.disabled).map((b) => [focusKey(b), b]);
     const focused = !keepEditor || !editor.contains(document.activeElement) ? focusKey(document.activeElement) : null;
     if (!keepEditor) main.innerHTML = html;
     else if (!redrawAround(editor.closest('#speakers-line'), html, '#speakers-line')) {
       if (quiet) return; // no Featuring row to keep it in (the episode didn't load): a refresh waits
       main.innerHTML = html;
     }
-    for (const button of waiting) main.querySelector(focusKey(button))?.replaceWith(button);
+    for (const [key, button] of waiting) if (key) main.querySelector(key)?.replaceWith(button);
     if (focused) main.querySelector(focused)?.focus({ preventScroll: true });
     main.dataset.html = html;
     tickClocks();
@@ -901,7 +971,7 @@ main.addEventListener('click', async (event) => {
   button.textContent = 'Subscribing…';
   const { ok, data } = await apiRaw('/subscriptions', {
     method: 'POST', body: JSON.stringify({ url: button.dataset.subscribeChannel, ...followBody('uploads') }),
-  }).catch((failure) => ({ ok: false, data: { detail: failure.message } }));
+  });
   if (!ok) {
     button.disabled = false;
     button.textContent = 'Subscribe';
@@ -1462,7 +1532,7 @@ async function clearAll(event) {
   status.textContent = 'Clearing…';
   const { ok, data } = await apiRaw('/catalogue/clear', {
     method: 'POST', body: JSON.stringify({ confirm: 'clear' }),
-  }).catch((failure) => ({ ok: false, data: { detail: failure.message } }));
+  });
   button.disabled = false;
   if (!ok) {
     status.textContent = problemText(data) || 'Couldn’t clear the catalogue.';
@@ -1751,7 +1821,7 @@ lookupBox.addEventListener('click', async (event) => {
   $('#lookup-sub-error').textContent = '';
   const { ok, data } = await apiRaw('/subscriptions', {
     method: 'POST', body: JSON.stringify({ url: info.url, ...followBody('uploads') }),
-  }).catch((failure) => ({ ok: false, data: { detail: failure.message } }));
+  });
   if (ok) {
     loadQueue().catch(() => {}); // the sidebar's count
     if (state.view?.name === 'subscriptions' && state.view.drawn) refreshSubscriptions({ force: true }).catch(() => {});
@@ -2198,32 +2268,12 @@ async function loadFoundVideos(cursor = null) {
   if (kind) query.set('kind', kind);
   if (unclipped) query.set('clipped', 'false');
   if (channel) query.set('podcast_id', channel);
-  const wasPaged = view.paged;
-  if (cursor) {
-    if (view.loadingMore) return;
-    view.loadingMore = true;
-    query.set('cursor', cursor);
-    view.paged = true; // from now on new finds don't replace the list; the runs on it still update
-  }
-  let page;
-  try {
-    page = await api(`/subscriptions/videos?${query}`);
-  } catch (error) {
-    if (cursor && state.view === view) view.paged = wasPaged; // nothing was added after all
-    throw error;
-  } finally {
-    if (cursor) view.loadingMore = false;
-  }
-  if (state.view !== view || !$('#sub-videos')) return;
-  if (cursor) {
-    const shown = new Set(view.videos.map((v) => v.video_id));
-    view.videos.push(...page.data.filter((v) => !shown.has(v.video_id)));
-  } else {
-    if (view.paged) return; // a later page arrived meanwhile; this one is already on the list
-    view.videos = page.data;
-  }
-  view.nextCursor = page.next_cursor;
-  renderVideos();
+  if (cursor) query.set('cursor', cursor);
+  const changed = await loadListPage(view, {
+    path: `/subscriptions/videos?${query}`, cursor, key: 'videos', idOf: (v) => v.video_id,
+    shown: () => state.view === view && Boolean($('#sub-videos')),
+  });
+  if (changed) renderVideos();
 }
 
 // The runs of the videos shown, as the queue has them now; the ones that left it, as they ended.
@@ -2288,8 +2338,9 @@ function renderBatchBar() {
   $('#batch-all').hidden = Boolean(batch) || !n || !more;
   $('#batch-all').textContent = `Select all ${more} not clipped`;
   $('#batch-clear').hidden = Boolean(batch) || !n;
-  const note = $('#batch-note');
-  if (note.innerHTML !== batchNote) note.innerHTML = batchNote;
+  // Compared with the markup last written, not innerHTML (which the browser normalizes, so it never matched):
+  // otherwise the live note is read out again, and its link loses focus, at every poll.
+  redraw($('#batch-note'), batchNote, 'href');
   $('#batch-dismiss').hidden = !batchNote || n > 0 || Boolean(batch);
 }
 
@@ -2306,8 +2357,7 @@ async function clipPicked() {
   let queued = 0;
   for (const video of picked) {
     if (batch.stop) break;
-    const { ok, data } = await apiRaw('/runs', { method: 'POST', body: JSON.stringify({ url: video.url, instructions }) })
-      .catch((failure) => ({ ok: false, data: { detail: failure.message } }));
+    const { ok, data } = await apiRaw('/runs', { method: 'POST', body: JSON.stringify({ url: video.url, instructions }) });
     batch.done += 1;
     if (ok) {
       queued += 1; // a new run, even for a video clipped before
@@ -2534,7 +2584,7 @@ function bindSubscriptionPage() {
     const body = control.dataset.follow ? followBody(control.value) : { autoclip: control.checked };
     const { ok, data } = await apiRaw(`/subscriptions/${encodeURIComponent(id)}`, {
       method: 'PATCH', body: JSON.stringify(body),
-    }).catch((failure) => ({ ok: false, data: { detail: failure.message } }));
+    });
     if (!ok) alert(problemText(data) || 'Couldn’t change the subscription.');
     $('#detail-actions').dataset.html = ''; // redraw even if nothing changed, putting back a refused choice
     if (onPage()) await refreshSubscriptions();
@@ -2546,7 +2596,7 @@ function bindSubscriptionPage() {
       check.disabled = true;
       const { ok, data } = await apiRaw(`/subscriptions/${encodeURIComponent(check.dataset.check)}/check`, {
         method: 'POST',
-      }).catch((failure) => ({ ok: false, data: { detail: failure.message } }));
+      });
       if (!ok) {
         check.disabled = false;
         alert(problemText(data) || 'Couldn’t ask for a check.');
@@ -2558,7 +2608,7 @@ function bindSubscriptionPage() {
       unsubscribe.disabled = true;
       const { ok, data } = await apiRaw(`/subscriptions/${encodeURIComponent(unsubscribe.dataset.unsubscribe)}`, {
         method: 'DELETE',
-      }).catch((failure) => ({ ok: false, data: { detail: failure.message } }));
+      });
       if (!ok) {
         unsubscribe.disabled = false;
         alert(problemText(data) || 'Couldn’t unsubscribe.');
@@ -2607,17 +2657,7 @@ function bindSubscriptionPage() {
     renderBatchBar();
   });
 
-  // One listener for every More (each page's button replaces the last), off while its page loads.
-  $('#sub-videos').addEventListener('click', async (event) => {
-    const button = event.target.closest('[data-more]');
-    if (!button || button.disabled || !onPage()) return;
-    button.disabled = true;
-    try {
-      await loadFoundVideos(button.dataset.more);
-    } catch (error) {
-      moreFailed(button, error);
-    }
-  });
+  onMore($('#sub-videos'), onPage, loadFoundVideos);
 }
 
 // Subscribe to the channels in an export file (GET /subscriptions/export), all at once: the file names each
@@ -2658,8 +2698,7 @@ async function importSubscriptions(file) {
   const button = $('#sub-import');
   button.disabled = true;
   progress.textContent = `Importing ${plural(fresh.length)}…`;
-  const { ok, data } = await apiRaw('/subscriptions/import', { method: 'POST', body: JSON.stringify(body) })
-    .catch((failure) => ({ ok: false, data: { detail: failure.message } }));
+  const { ok, data } = await apiRaw('/subscriptions/import', { method: 'POST', body: JSON.stringify(body) });
   if (!$('#sub-import')) return; // left the page
   button.disabled = false;
   if (!ok) {
@@ -2706,26 +2745,32 @@ async function subscribeAll(form, grow) {
   let already = 0;
   let done = 0;
   let last = null;
-  for (const url of entries) {
-    if (bulk.stop) break;
-    if (many) progress().textContent = `Subscribing to ${done + 1} of ${entries.length}: ${url}`;
-    const { ok, status, data } = await apiRaw('/subscriptions', {
-      method: 'POST', body: JSON.stringify({ url, ...follow }),
-    }).catch((failure) => ({ ok: false, data: { detail: failure.message } }));
-    done += 1;
-    if (ok) {
-      if (status === 201) added += 1;
-      else already += 1;
-      last = data;
-      if (many && state.view?.name === 'subscriptions' && state.view.drawn) {
-        await refreshSubscriptions().catch(() => {}); // the rail fills in as it goes
+  // The list carries on if you go to another page meanwhile (so the form may be gone at any step), and `bulk`
+  // is always let go of after: while it's set, the form's button only stops a list.
+  try {
+    for (const url of entries) {
+      if (bulk.stop) break;
+      const shown = progress();
+      if (many && shown) shown.textContent = `Subscribing to ${done + 1} of ${entries.length}: ${url}`;
+      const { ok, status, data } = await apiRaw('/subscriptions', {
+        method: 'POST', body: JSON.stringify({ url, ...follow }),
+      });
+      done += 1;
+      if (ok) {
+        if (status === 201) added += 1;
+        else already += 1;
+        last = data;
+        if (many && state.view?.name === 'subscriptions' && state.view.drawn) {
+          await refreshSubscriptions().catch(() => {}); // the rail fills in as it goes
+        }
+      } else {
+        failed.push({ url, message: problemText(data) || 'Couldn’t subscribe.' });
       }
-    } else {
-      failed.push({ url, message: problemText(data) || 'Couldn’t subscribe.' });
     }
+  } finally {
+    bulk = null;
   }
   const left = entries.slice(done);
-  bulk = null;
   const box = $('#sub-form')?.elements.urls;
   if (box) {
     box.value = [...failed.map((f) => f.url), ...left].join('\n');
@@ -2827,32 +2872,11 @@ async function loadEpisodes(cursor = null) {
   for (const status of view.show === 'active' ? ['queued', 'processing'] : view.show ? [view.show] : []) {
     query.append('status', status);
   }
-  const wasPaged = view.paged;
-  if (cursor) {
-    if (view.loadingMore) return;
-    view.loadingMore = true;
-    view.paged = true;
-    query.set('cursor', cursor);
-  }
-  let page;
-  try {
-    page = await api(`/runs?${query}`);
-  } catch (error) {
-    if (cursor && state.view === view) view.paged = wasPaged;
-    throw error;
-  } finally {
-    if (cursor) view.loadingMore = false;
-  }
-  if (!stillOn(view, 'episodes')) return;
-  if (cursor) {
-    const shown = new Set(view.runs.map((r) => r.id));
-    view.runs.push(...page.data.filter((r) => !shown.has(r.id)));
-  } else {
-    if (view.paged) return; // a later page arrived meanwhile
-    view.runs = page.data;
-  }
-  view.nextCursor = page.next_cursor;
-  renderEpisodes();
+  if (cursor) query.set('cursor', cursor);
+  const changed = await loadListPage(view, {
+    path: `/runs?${query}`, cursor, key: 'runs', idOf: (r) => r.id, shown: () => stillOn(view, 'episodes'),
+  });
+  if (changed) renderEpisodes();
 }
 
 // While runs are going: each row as the queue has it, the ended ones fetched, and (unless more pages
@@ -2919,16 +2943,7 @@ async function showEpisodes(params) {
       alert(error.message);
     }
   });
-  $('#ep-more').addEventListener('click', async (event) => {
-    const button = event.target.closest('[data-more]');
-    if (!button || button.disabled || !stillOn(view, 'episodes')) return;
-    button.disabled = true;
-    try {
-      await loadEpisodes(button.dataset.more);
-    } catch (error) {
-      moreFailed(button, error);
-    }
-  });
+  onMore($('#ep-more'), () => stillOn(view, 'episodes'), loadEpisodes);
   await loadEpisodes();
 }
 
@@ -3336,8 +3351,10 @@ async function poll() {
       await showRun(view.id, { quiet: true });
     } else if (view?.name === 'home' && changed) {
       await refreshHome(view); // a run ended: its clips are the newest (the TV keeps playing)
-    } else if (view?.name === 'subscriptions' && (view.pending || busy)) {
-      await refreshSubscriptions();
+    } else if (view?.name === 'subscriptions' && (view.pending || changed)) {
+      await refreshSubscriptions(); // a check going, or a run queued or ended: the channels' counts change
+    } else if (view?.name === 'subscriptions' && busy) {
+      await followVideoRuns(); // only the stage of the run going changes
     } else if (view?.name === 'episodes' && busy) {
       await followEpisodeRuns({ changed });
     }
@@ -3354,6 +3371,8 @@ document.addEventListener('visibilitychange', () => {
   if (!document.hidden && !polling && pollTimer === null) poll();
 });
 
+// The sidebar's counts don't wait for the labs (the sidebar draws with labs' placeholder until they're in).
+loadQueue().catch(() => {});
 // Before the first page, so a lab's page or hook is there for it. Same ?v= as this file, so never stale.
 labs = await import(`./labs/index.js${new URL(import.meta.url).search}`)
   .then((module) => module.install({
@@ -3362,6 +3381,5 @@ labs = await import(`./labs/index.js${new URL(import.meta.url).search}`)
   }))
   .catch((error) => { console.warn('labs did not load', error); return labs; });
 
-loadQueue().catch(() => {}); // the sidebar's counts too
 route();
 pollTimer = setTimeout(poll, POLL_MS);

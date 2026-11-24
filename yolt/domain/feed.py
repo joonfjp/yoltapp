@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import random
 from dataclasses import dataclass
+from functools import cached_property
 
 DAY_SECONDS = 86_400
 # (name, younger than this many days). Clips older than the last tier are only reachable through ALL_TIME.
@@ -33,11 +34,13 @@ class Candidate:
     age_seconds: float
     plays: int
 
-    @property
+    # Computed once per candidate, not on every pick: a batch of 8 looks at each candidate up to 16 times, which
+    # was most of the feed's time in a large catalogue. (cached_property stores past the frozen dataclass.)
+    @cached_property
     def play_weight(self) -> float:
         return 1.0 / (1 + max(0, self.plays)) ** PLAY_PENALTY_EXPONENT
 
-    @property
+    @cached_property
     def tier(self) -> int | None:
         """Index into TIERS, or None when older than every tier."""
         return next((i for i, (_, days) in enumerate(TIERS) if self.age_seconds < days * DAY_SECONDS), None)
@@ -103,9 +106,17 @@ def select(candidates: list[Candidate], *, recent: list[int], previous_episode: 
     previous = previous_episode
     out: list[tuple[Candidate, str]] = []
     while len(out) < count:
-        unpicked = [i for i in range(len(candidates)) if i not in picked]
-        fresh = [i for i in unpicked if candidates[i].clip_id not in excluded]
-        separated = [i for i in fresh if candidates[i].episode_id != previous]
+        unpicked: list[int] = []
+        fresh: list[int] = []  # not shown recently
+        separated: list[int] = []  # and not from the episode just picked
+        for i, candidate in enumerate(candidates):  # one pass for all three: this runs once per pick
+            if i in picked:
+                continue
+            unpicked.append(i)
+            if candidate.clip_id not in excluded:
+                fresh.append(i)
+                if candidate.episode_id != previous:
+                    separated.append(i)
         indexes = next((group for group in (separated, fresh, unpicked) if group), None)
         if indexes is None:
             break

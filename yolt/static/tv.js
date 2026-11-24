@@ -197,7 +197,7 @@ export async function show(params, app, { into = app.main, compact = false } = {
       </div>
       <aside class="tv-right">
         <div class="tv-meta" id="tv-meta"></div>
-        <output class="tv-countdown" id="tv-countdown" aria-label="Seconds left in this clip"></output>
+        <output class="tv-countdown" id="tv-countdown" aria-label="Seconds left in this clip" aria-live="off"></output>
         <div class="tv-later">
           <div id="tv-next"></div>
           <p class="tv-keys"><kbd>↑</kbd><kbd>↓</kbd> change clip · <kbd>Space</kbd> pause · <kbd>M</kbd> mute ·
@@ -226,7 +226,8 @@ export async function show(params, app, { into = app.main, compact = false } = {
   let index = -1;
   let shown = []; // ids of the clips shown, oldest first, for `recent`
   let unplayable = readList(UNPLAYABLE_KEY);
-  let refilling = null;
+  let refilling = null; // { promise, tuning } while picks are being fetched
+  let tuning = 0; // bumped by retune: picks fetched for the channel as it was before are dropped
   let powered = false; // playing, or trying to: false before the first clip, and when nothing matches
   let playedAny = false; // a first clip that doesn't start means the browser held it back
   let userMuted = compact; // muted with VOL or M (the home page's TV starts so)
@@ -345,11 +346,12 @@ export async function show(params, app, { into = app.main, compact = false } = {
     const length = Math.max(0.001, end - start);
     const into = Math.min(length, Math.max(0, time - start));
     const percent = (into / length) * 100;
-    elapsed.textContent = clock(into);
+    const at = clock(into);
+    if (elapsed.textContent !== at) elapsed.textContent = at; // this runs every 150 ms; the text changes once a second
     if (!scrubbing) progress.value = String(percent);
     progress.style.setProperty('--progress', `${percent}%`);
     const left = Math.max(0, Math.ceil(length - into));
-    countdown.textContent = `${left}s`;
+    if (countdown.textContent !== `${left}s`) countdown.textContent = `${left}s`;
     countdown.classList.toggle('urgent', status === 'playing' && left > 0 && left <= URGENT_SECONDS);
     if (words) subtitles.show(item.words, time * 1000);
     showPull(item, time * 1000);
@@ -428,11 +430,15 @@ export async function show(params, app, { into = app.main, compact = false } = {
     return query;
   }
 
+  // Picks for the channel as it's tuned now. A fetch still going for the same tuning is shared; one from before
+  // a retune isn't, and its picks (for the old filters) are dropped when they come.
   function refill() {
-    if (refilling) return refilling;
-    refilling = (async () => {
+    if (refilling?.tuning === tuning) return refilling.promise;
+    const mine = { tuning };
+    const wanted = () => root.isConnected && mine.tuning === tuning;
+    mine.promise = (async () => {
       const { ok, data } = await app.apiRaw(`/feed?${feedQuery()}`);
-      if (!root.isConnected) return 0;
+      if (!wanted()) return 0;
       if (!ok) {
         note(app.problemText(data) || "Couldn't pick clips.", { picking: true });
         return 0;
@@ -441,14 +447,15 @@ export async function show(params, app, { into = app.main, compact = false } = {
       if (pickingNote) note('');
       return data.data.length;
     })().catch(() => {
-      note("Couldn't reach Yolt to pick clips.", { picking: true });
+      if (wanted()) note("Couldn't pick clips.", { picking: true });
       return 0;
     }).finally(() => {
-      refilling = null;
+      if (refilling === mine) refilling = null;
       if (root.isConnected) renderNext();
     });
+    refilling = mine;
     renderNext();
-    return refilling;
+    return mine.promise;
   }
 
   function trimHistory() {
@@ -459,8 +466,9 @@ export async function show(params, app, { into = app.main, compact = false } = {
   }
 
   async function next() {
+    const tuned = tuning;
     if (index + 1 >= items.length) await refill();
-    if (!root.isConnected) return;
+    if (!root.isConnected || tuned !== tuning) return; // retuned meanwhile: retune carries on from here
     if (index + 1 >= items.length) {
       stop(items.length ? 'Nothing more to play on this channel.' : 'No clips on this channel yet.');
       return;
@@ -479,11 +487,12 @@ export async function show(params, app, { into = app.main, compact = false } = {
 
   // Back to the start with what the channel's filters pick now. `keep` keeps the clip playing on.
   async function retune({ keep = false } = {}) {
+    const mine = ++tuning;
     items = keep && current() ? [current()] : [];
     index = items.length - 1;
     if (!keep) shown = [];
     const added = await refill();
-    if (!root.isConnected) return;
+    if (!root.isConnected || mine !== tuning) return; // tuned again meanwhile: the later retune carries on
     if (!added) {
       if (!items.length) stop(filters.toString() ? 'No clips match this channel.' : 'No clips yet: clip a video first.');
       return;

@@ -231,6 +231,38 @@ def test_theme_ids_outlive_the_cache(api):
         assert problem(api.get(f"/api/v1/clips?theme={unknown}"), 422)["errors"][0]["code"] == "theme_not_found"
 
 
+def test_the_idle_worker_clusters_the_default_themes_ahead(catalogue, database_url, tmp_path, server, make_api,
+                                                          monkeypatch):
+    """Once new vectors are in and the worker is idle, it clusters the themes the home page and Search ask for
+    (k=12 and 20, or every clip in a smaller catalogue: 8 here), so GET /themes finds them ready."""
+    from yolt.domain import themes as clustering
+    from yolt.pipeline import Worker
+
+    theme_repo._cache.clear()
+    clustered = []
+    real = clustering.cluster
+    monkeypatch.setattr(clustering, "cluster", lambda x, k, **kw: clustered.append(k) or real(x, k, **kw))
+    db = Database(database_url)
+    worker = Worker(db, tmp_path, embeddings=EmbeddingService(db.settings, server.client_factory()), idle_seconds=0)
+    try:
+        with db.connect() as conn:  # nothing embedded yet: nothing to cluster
+            assert theme_repo.warm(conn, worker.embeddings.pinned(db.settings())) == []
+        assert worker._lock.acquire()
+        worker.active = True
+        worker._tick()  # embeds the backlog; there may be more, so no themes yet (each batch changes them)
+        assert clustered == []
+        worker._tick()  # the backlog is done: the themes are clustered
+        assert clustered == [8]
+        worker._tick()  # nothing new embedded: not again
+        assert clustered == [8]
+        listed = make_api(embedded=False).get("/api/v1/themes?k=8")
+        assert listed.status_code == 200 and listed.json()["clip_count"] == 8
+        assert clustered == [8]  # served from what the worker clustered
+    finally:
+        worker._lock.release()
+        db.close()
+
+
 def test_themes_need_vectors(catalogue, make_api):
     body = problem(make_api(embedded=False).get("/api/v1/themes"), 503)
     assert body["type"].endswith("/vectors-unavailable")

@@ -23,6 +23,8 @@ kept for later runs).
 Once a run is ready its clips and passages are embedded for semantic search, and
 the episode's speakers are inferred (once per episode). Both are best effort: if a
 service is down the run stays ready, and the worker catches up whenever it's idle.
+Idle with new vectors, it also clusters the themes the home page and Search show by
+default, so the first look at them doesn't wait for it.
 """
 
 from __future__ import annotations
@@ -44,6 +46,7 @@ from .db import Database, RunCancelled, WorkerLock
 from .embed import embed_pending
 from .embeddings import EmbeddingService, EmbeddingUnavailable
 from .ingest import Word
+from .repo import themes as theme_repo
 
 log = logging.getLogger("yolt.pipeline")
 
@@ -110,6 +113,9 @@ class Worker:
         self.embeddings = embeddings or EmbeddingService(db.settings, client_factory)
         self._backfill_after = 0.0
         self._speakers_after = 0.0
+        # The UI's default themes are clustered ahead once the worker is idle: at start (the cache is in memory),
+        # and after anything new is embedded (which changes the clustering).
+        self._themes_due = True
         self._lock = WorkerLock(db.url)
         self.active = False  # whether this server's worker is the one processing runs
         self._unrecorded: dict[int, tuple[str, int | None]] = {}  # failures not saved yet: (error, attempt)
@@ -230,6 +236,8 @@ class Worker:
                 self._sweep()
             more = self._backfill()
             more = self._speaker_backfill() or more
+            if not more and self._themes_due:  # not between backfill batches: each changes the vectors again
+                self._warm_themes()
             if not more:  # keep going while there's a backlog; runs still come first
                 self._wake.wait(self.idle_seconds)
                 self._wake.clear()
@@ -408,12 +416,32 @@ class Worker:
                 return
             done = embed_pending(self.db, self.embeddings, run_id=run_id)
             log.info("run %s: embedded %s clips, %s passages", run_id, done.clips, done.passages)
+            self._themes_due = self._themes_due or bool(done.total)
         except EmbeddingUnavailable as error:
             log.warning("run %s: not embedded yet (%s); will retry when idle", run_id, error)
             self._backfill_after = time.monotonic() + BACKFILL_RETRY_SECONDS
         except Exception:  # noqa: BLE001 - embedding is best effort
             log.exception("run %s: embedding failed", run_id)
             self._backfill_after = time.monotonic() + BACKFILL_RETRY_SECONDS
+
+    def _warm_themes(self) -> None:
+        """Cluster the themes the home page and Search show by default for the vectors as they are now, so the
+        first look at them needn't wait (a second or more on a large catalogue). Best effort: if it fails, the
+        first request clusters them, as it would anyway."""
+        self._themes_due = False
+        if self._stopping.is_set():
+            return
+        try:
+            embeddings = self.embeddings.pinned(self.db.settings())  # read before taking the connection
+            if not embeddings.configured:
+                return
+            started = time.monotonic()
+            with self.db.connect() as conn:
+                built = theme_repo.warm(conn, embeddings)
+            if built:
+                log.info("themes ready for k=%s (%.1fs)", ", ".join(map(str, built)), time.monotonic() - started)
+        except Exception:  # noqa: BLE001 - e.g. the database restarting; GET /themes clusters them instead
+            log.exception("couldn't cluster the themes ahead")
 
     def _backfill(self) -> bool:
         """Embed a batch of anything still pending. True if there may be more right away."""
@@ -435,6 +463,7 @@ class Worker:
             return False
         if done.total:
             log.info("embedded %s pending clips, %s passages", done.clips, done.passages)
+            self._themes_due = True
             return True
         self._backfill_after = now + BACKFILL_CHECK_SECONDS
         return False

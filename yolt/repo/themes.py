@@ -34,6 +34,9 @@ from .common import LATEST_SQL
 DEFAULT_K = 30
 MIN_K = 2
 MAX_K = 100
+# The k's the UI asks for by default (app.js HOME_THEMES_K, loadThemes): the home page's 12 and Search's 20, or
+# every clip when there are fewer. The worker clusters these ahead (warm) once new vectors are in.
+UI_KS = (12, 20)
 TOP_COMPILATIONS = 3
 COVERED_BY = 2  # a compilation covers a theme when at least this many of its items come from it
 THEME_ID = re.compile(r"^k([1-9]\d*)-([1-9]\d*)-([0-9a-f]{4})$")
@@ -45,15 +48,20 @@ SORTS = {"-unused": lambda t: (-t["unused_count"], -t["clip_count"]),
 
 # Each clustered clip's vector: its nonzero passages' mean, else its own. A zero vector has no direction
 # (cosine with it is NaN), so it would only make a junk theme of its own. Sent as pgvector binary (vector_send).
-CLIP_PASSAGES = """SELECT p.clip_id, avg(pv.embedding) AS v FROM passages p
-                   JOIN passage_vectors pv ON pv.passage_id = p.id AND pv.model_name = %(m)s
-                   WHERE vector_norm(pv.embedding) > 0 GROUP BY p.clip_id"""
-VECTORS_SQL = f"""
+# Worked out clip by clip (an index lookup or two each), so no step ever sorts or hashes rows carrying 4 KB
+# vectors: grouped all at once they spilled to disk, ~2x slower on 24,000 clips. A clip's own vector is only
+# looked up when it has no passage vectors, and OFFSET 0 keeps the subquery from being merged into the outer
+# one, which would work each clip's vector out twice (once more for the WHERE).
+VECTORS_SQL = """
 SELECT clip_id, title, summary, episode_id, vector_send(v) AS v FROM (
-    SELECT c.id AS clip_id, c.title, c.summary, r.episode_id, COALESCE(pm.v, cv.embedding) AS v
+    SELECT c.id AS clip_id, c.title, c.summary, r.episode_id, COALESCE(
+        (SELECT avg(pv.embedding) FROM passages p
+           JOIN passage_vectors pv ON pv.passage_id = p.id AND pv.model_name = %(m)s
+          WHERE p.clip_id = c.id AND vector_norm(pv.embedding) > 0),
+        (SELECT cv.embedding FROM clip_vectors cv
+          WHERE cv.clip_id = c.id AND cv.model_name = %(m)s AND vector_norm(cv.embedding) > 0)) AS v
     FROM clips c JOIN runs r ON r.id = c.run_id
-    LEFT JOIN ({CLIP_PASSAGES}) pm ON pm.clip_id = c.id
-    LEFT JOIN clip_vectors cv ON cv.clip_id = c.id AND cv.model_name = %(m)s AND vector_norm(cv.embedding) > 0
+    OFFSET 0
 ) x
 WHERE vector_norm(v) > 0
 ORDER BY clip_id"""
@@ -114,8 +122,10 @@ def fingerprint(conn: psycopg.Connection, service: EmbeddingService) -> Fingerpr
     return Fingerprint(model, fp["n"], fp["digest"])
 
 
-def _build(conn: psycopg.Connection, fp: Fingerprint, k: int) -> list[Theme]:
-    rows = conn.execute(VECTORS_SQL, {"m": fp.model}).fetchall()
+def _build(conn: psycopg.Connection, fp: Fingerprint, k: int, rows: list[dict] | None = None) -> list[Theme]:
+    """Cluster into k themes. `rows` are VECTORS_SQL's, if the caller has read them already."""
+    if rows is None:
+        rows = conn.execute(VECTORS_SQL, {"m": fp.model}).fetchall()
     if len(rows) < k:
         raise TooFewClips(len(rows))
     result = clustering.cluster(np.stack([from_binary(r["v"]) for r in rows]), k)
@@ -149,8 +159,8 @@ def themes_for(conn: psycopg.Connection, service: EmbeddingService, k: int, fp: 
                                       parameter="k")]) from None
 
 
-def _clustered(conn: psycopg.Connection, fp: Fingerprint, k: int) -> list[Theme]:
-    """The clustering for this key, from the cache or built now. Raises TooFewClips."""
+def _clustered(conn: psycopg.Connection, fp: Fingerprint, k: int, rows: list[dict] | None = None) -> list[Theme]:
+    """The clustering for this key, from the cache or built now (from `rows`, if given). Raises TooFewClips."""
     key = fp.key(k)
     with _lock:
         if key in _cache:
@@ -162,7 +172,7 @@ def _clustered(conn: psycopg.Connection, fp: Fingerprint, k: int) -> list[Theme]
             if key in _cache:
                 return _cache[key]
         try:
-            built = _build(conn, fp, k)
+            built = _build(conn, fp, k, rows)
         except BaseException:
             with _lock:
                 _builds.pop(key, None)
@@ -172,6 +182,28 @@ def _clustered(conn: psycopg.Connection, fp: Fingerprint, k: int) -> list[Theme]
             _builds.pop(key, None)
             while len(_cache) > CACHE_SIZE:
                 _cache.popitem(last=False)
+    return built
+
+
+def warm(conn: psycopg.Connection, service: EmbeddingService) -> list[int]:
+    """Cluster the themes the UI shows by default (UI_KS) for the current vectors, unless they're cached: so the
+    first look after new vectors (or a restart) needn't wait for it, a second or more in a large catalogue. The
+    vectors are read once for all of them. Returns the k's clustered now; none when nothing is embedded."""
+    if not vectors.has_vectors(conn, service.model_name):
+        return []
+    fp = fingerprint(conn, service)
+    if fp.count < MIN_K:
+        return []
+    with _lock:
+        due = sorted(k for k in {min(k, fp.count) for k in UI_KS} if fp.key(k) not in _cache)
+    rows = conn.execute(VECTORS_SQL, {"m": fp.model}).fetchall() if due else []
+    built = []
+    for k in due:
+        try:
+            _clustered(conn, fp, k, rows)
+        except TooFewClips:  # some clips with vectors have only zero ones: fewer to cluster than counted
+            continue
+        built.append(k)
     return built
 
 

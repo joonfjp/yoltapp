@@ -342,7 +342,7 @@ def matched_passages(conn: psycopg.Connection, q: str, clip_ids: list[int]) -> d
     for r in conn.execute(
         """SELECT p.clip_id, p.first_word_seq, p.last_word_seq, p.text
            FROM passages p, websearch_to_tsquery('english', %s) query
-           WHERE p.clip_id = ANY(%s) AND to_tsvector('english', p.text) @@ query
+           WHERE p.clip_id = ANY(%s) AND p.fts @@ query
            ORDER BY p.clip_id, p.first_word_seq""", (q, clip_ids)):
         out.setdefault(r["clip_id"], []).append(
             {"words": {"first": r["first_word_seq"], "last": r["last_word_seq"]}, "text": r["text"]})
@@ -383,12 +383,18 @@ def clip_words(conn: psycopg.Connection, clip_ids: list[int]) -> dict[int, ClipW
            FROM clips c JOIN runs r ON r.id = c.run_id WHERE c.id = ANY(%s) AND r.status = 'ready'""",
             (clip_ids,)):
         out[r["id"]] = ClipWords(r["id"], r["transcript_version_id"], r["first_word_seq"], r["last_word_seq"])
+    if not out:
+        return out
+    # The bounds go in as one list, so each clip's words are one index range scan. Joined through clips and
+    # runs instead, PostgreSQL scans the index by transcript alone and filters the range afterwards: every word
+    # of every clip's transcript (an 8-clip TV batch read 120,000 words to keep 800).
+    bounds = list(out.values())
     for r in conn.execute(
-        """SELECT c.id AS clip_id, w.seq, w.word, w.start_ms, w.end_ms
-           FROM clips c JOIN runs r ON r.id = c.run_id
-           JOIN transcript_words w ON w.transcript_version_id = r.transcript_version_id
-            AND w.seq BETWEEN c.first_word_seq AND c.last_word_seq
-           WHERE c.id = ANY(%s)""", (list(out),)):
+        """SELECT b.clip_id, w.seq, w.word, w.start_ms, w.end_ms
+           FROM unnest(%s::bigint[], %s::bigint[], %s::integer[], %s::integer[]) AS b(clip_id, tv, first, last)
+           JOIN transcript_words w ON w.transcript_version_id = b.tv AND w.seq BETWEEN b.first AND b.last""",
+            ([c.clip_id for c in bounds], [c.transcript_id for c in bounds], [c.first for c in bounds],
+             [c.last for c in bounds])):
         out[r["clip_id"]].words[r["seq"]] = Word(r["seq"], r["word"], r["start_ms"], r["end_ms"])
     return out
 

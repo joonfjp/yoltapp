@@ -17,8 +17,6 @@
 .tool-tabs a:hover { background: var(--pill-hover); }
 .tool-tabs a[aria-current="page"] { background: var(--accent-bg); color: var(--accent-text); }
 
-.lab-panel { margin-top: 32px; }
-
 /* Settings → Labs */
 .lab-toggle { gap: 2px; }
 .lab-toggle > span:first-child { display: inline-flex; align-items: center; gap: 8px; color: var(--text); }

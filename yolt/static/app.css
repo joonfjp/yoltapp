@@ -817,8 +817,6 @@ textarea { display: block; resize: vertical; line-height: 1.45; font-family: inh
 .search-form { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 0 0 16px; max-width: 1000px; }
 .search-form input[type="search"] { flex: 1; min-width: 220px; }
 .search-form select { width: auto; }
-.page-head { display: flex; align-items: center; gap: 14px; margin: 0 0 16px; }
-.page-head .page-title { margin: 8px 0 0; }
 
 /* The Episodes tab's tabs (app.js libraryTabs): set as the page's headline, the one you're on in ink, the
    others grey. The page's own h1 under them is kept for screen readers only. */
